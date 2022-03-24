@@ -18,11 +18,13 @@ const (
 )
 
 type MiCloud struct {
-	username string
-	password string
-	deviceId string
-	agentId  string
-	sign     string
+	username             string
+	password             string
+	deviceId             string
+	agentId              string
+	sign                 string
+	authenticateResponse authenticateResponse
+	serviceToken         string
 }
 
 type Step1Model struct {
@@ -37,11 +39,9 @@ func NewMiCloud(username string, password string) *MiCloud {
 }
 
 func (cloud *MiCloud) LogIn() {
-	response := cloud.getSign()
-	strings.Replace(response, "&&&START&&&", "", 1)
-	var m Step1Model
-	json.Unmarshal([]byte(response), &m)
+	cloud.getSign()
 	cloud.authenticate()
+	cloud.getServiceToken()
 }
 
 func (cloud *MiCloud) generateDeviceId() {
@@ -60,7 +60,8 @@ func (cloud *MiCloud) generateAgentId() {
 	}
 }
 
-func (cloud *MiCloud) getSign() string {
+// step 1
+func (cloud *MiCloud) getSign() {
 	url := "https://account.xiaomi.com/pass/serviceLogin?sid=xiaomiio&_json=true"
 	request, _ := http.NewRequest(http.MethodGet, url, nil)
 	request.Header = make(http.Header)
@@ -68,22 +69,17 @@ func (cloud *MiCloud) getSign() string {
 	request.AddCookie(&http.Cookie{Name: "sdkVersion", Value: "3.8.6"})
 	request.AddCookie(&http.Cookie{Name: "deviceId", Value: cloud.deviceId})
 
-	jsonStr := "{\"serviceParam\":\"{\\\"checkSafePhone\\\":false,\\\"checkSafeAddress\\\":false,\\\"lsrp_score\\\":0.0}\",\"qs\":\"%3Fsid%3Dxiaomiio%26_json%3Dtrue\",\"code\":70016,\"description\":\"登录验证失败\",\"securityStatus\":0,\"_sign\":\"0psXfr43eNI0IX6q9Suk3qWbRqU=\",\"sid\":\"xiaomiio\",\"result\":\"error\",\"captchaUrl\":null,\"callback\":\"https://sts.api.io.mi.com/sts\",\"location\":\"https://account.xiaomi.com/fe/service/login?_json=true&sid=xiaomiio&qs=%253Fsid%253Dxiaomiio%2526_json%253Dtrue&callback=https%3A%2F%2Fsts.api.io.mi.com%2Fsts&_sign=0psXfr43eNI0IX6q9Suk3qWbRqU%3D&serviceParam=%7B%22checkSafePhone%22%3Afalse%2C%22checkSafeAddress%22%3Afalse%2C%22lsrp_score%22%3A0.0%7D&showActiveX=false&theme=&needTheme=false&bizDeviceType=\",\"pwd\":0,\"desc\":\"登录验证失败\"}"
-	model2 := Step1Response{}
-	json.Unmarshal([]byte(jsonStr), &model2)
-
 	response, _ := http.DefaultClient.Do(request)
 	body, _ := ioutil.ReadAll(response.Body)
 	fmt.Println(string(body[11:]))
-	responseModel := Step1Response{}
+	responseModel := signResponse{}
 	json.Unmarshal(body[11:], &responseModel)
 
 	cloud.sign = responseModel.Sign
-
-	return string(body)
 }
 
-func (cloud *MiCloud) authenticate() string {
+// step 2
+func (cloud *MiCloud) authenticate() {
 	url := "https://account.xiaomi.com/pass/serviceLoginAuth2?_json=true"
 
 	form := u.Values{}
@@ -108,8 +104,13 @@ func (cloud *MiCloud) authenticate() string {
 	client := &http.Client{}
 	response, _ := client.Do(request)
 	body, _ := ioutil.ReadAll(response.Body)
-	fmt.Println(string(body))
-	return string(body)
+	fmt.Println(string(body[11:]))
+	responseModel := authenticateResponse{}
+	json.Unmarshal(body[11:], &responseModel)
+
+	if responseModel.Result == "ok" {
+		cloud.authenticateResponse = responseModel
+	}
 }
 
 func hash(password string) string {
@@ -119,4 +120,47 @@ func hash(password string) string {
 	hash := hex.EncodeToString(m.Sum(nil))
 
 	return strings.ToUpper(hash)
+}
+
+// step 3
+func (cloud *MiCloud) getServiceToken() {
+	url := cloud.authenticateResponse.Location
+
+	request, _ := http.NewRequest(http.MethodGet, url, nil)
+
+	client := &http.Client{}
+	response, _ := client.Do(request)
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == "serviceToken" {
+			cloud.serviceToken = cookie.Value
+			break
+		}
+	}
+}
+
+func (cloud *MiCloud) GetDevices() {
+	url := "https://api.io.mi.com/app/home/device_list"
+	// params = {
+	// 	'data': '{"getVirtualModel":true,"getHuamiDevices":1,"get_split_device":false,"support_smart_home":true}'
+	// }
+
+	request, _ := http.NewRequest(http.MethodGet, url, nil)
+	request.Header = make(http.Header)
+	request.Header["User-Agent"] = []string{fmt.Sprintf("Android-7.1.1-1.0.0-ONEPLUS A3010-136-%s APP/xiaomi.smarthome APPV/62830", cloud.agentId)}
+	request.Header["Accept-Encoding"] = []string{"identity"}
+	request.Header["x-xiaomi-protocal-flag-cli"] = []string{"PROTOCAL-HTTP2"}
+	request.Header["content-type"] = []string{"application/x-www-form-urlencoded"}
+	request.Header["MIOT-ENCRYPT-ALGORITHM"] = []string{"ENCRYPT-RC4"}
+	request.AddCookie(&http.Cookie{Name: "userId", Value: cloud.authenticateResponse.UserId})
+	request.AddCookie(&http.Cookie{Name: "yetAnotherServiceToken", Value: cloud.serviceToken})
+	request.AddCookie(&http.Cookie{Name: "serviceToken", Value: cloud.serviceToken})
+	request.AddCookie(&http.Cookie{Name: "locale", Value: "zh_CN"})
+	request.AddCookie(&http.Cookie{Name: "timezone", Value: "GMT +08:00"})
+	request.AddCookie(&http.Cookie{Name: "is_daylight", Value: "0"})
+	request.AddCookie(&http.Cookie{Name: "dst_offset", Value: "0"})
+	request.AddCookie(&http.Cookie{Name: "channel", Value: "MI_APP_STORE"})
+
+	response, _ := http.DefaultClient.Do(request)
+	body, _ := ioutil.ReadAll(response.Body)
+	fmt.Println(string(body))
 }
