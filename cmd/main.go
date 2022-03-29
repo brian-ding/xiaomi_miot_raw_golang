@@ -13,4 +13,6 @@ func main() {
 	fmt.Println(os.Args[2])
 	cloud := micloud.NewMiCloud(os.Args[1], os.Args[2])
 	cloud.LogIn()
+	devices := cloud.GetDevices()
+	fmt.Println(devices)
 }
