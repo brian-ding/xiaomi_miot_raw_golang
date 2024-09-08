@@ -1,0 +1,16 @@
+{
+    "serviceParam": "{\"checkSafePhone\":false,\"checkSafeAddress\":false,\"lsrp_score\":0.0}",
+    "qs": "%3Fsid%3Dxiaomiio%26_json%3Dtrue",
+    "code": 70016,
+    "description": "登录验证失败",
+    "securityStatus": 0,
+    "_sign": "0psXfr43eNI0IX6q9Suk3qWbRqU=",
+    "sid": "xiaomiio",
+    "result": "error",
+    "captchaUrl": null,
+    "callback": "https://sts.api.io.mi.com/sts",
+    "location": "https://account.xiaomi.com/fe/service/login?_json=true&sid=xiaomiio&qs=%253Fsid%253Dxiaomiio%2526_json%253Dtrue&callback=https%3A%2F%2Fsts.api.io.mi.com%2Fsts&_sign=0psXfr43eNI0IX6q9Suk3qWbRqU%3D&serviceParam=%7B%22checkSafePhone%22%3Afalse%2C%22checkSafeAddress%22%3Afalse%2C%22lsrp_score%22%3A0.0%7D&showActiveX=false&theme=&needTheme=false&bizDeviceType=",
+    "pwd": 0,
+    "child": 0,
+    "desc": "登录验证失败"
+}
