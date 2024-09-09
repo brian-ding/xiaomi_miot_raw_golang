@@ -1,17 +1,42 @@
 package micloud
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand/v2"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
 )
 
 type Cloud struct {
+	Username   string
+	Password   string
+	httpClient *http.Client
+}
+
+func NewCloud(username string, password string) *Cloud {
+	options := &cookiejar.Options{}
+	jar, err := cookiejar.New(options)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	client := &http.Client{
+		Jar: jar,
+	}
+
+	return &Cloud{
+		Username:   username,
+		Password:   password,
+		httpClient: client,
+	}
 }
 
 type LoginInfo struct {
@@ -25,17 +50,20 @@ func (cloud *Cloud) GetLoginInfo() (LoginInfo, error) {
 	var result LoginInfo
 	clientId := getClientId()
 	domainUrl := "https://account.xiaomi.com/"
-	cookie1 := http.Cookie{Name: "sdkVersion", Value: "3.9"}
-	cookie2 := http.Cookie{Name: "deviceId", Value: clientId}
+	domainUrlObj, _ := url.Parse(domainUrl)
 
-	requestUrl, _ := url.Parse(fmt.Sprintf("%s%s", domainUrl, "pass/serviceLogin?sid=xiaomiio&_json=true"))
-	request := http.Request{Method: http.MethodGet, URL: requestUrl}
+	cookies := make([]*http.Cookie, 2)
+	cookies[0] = &http.Cookie{Name: "sdkVersion", Value: "3.9"}
+	cookies[1] = &http.Cookie{Name: "deviceId", Value: clientId}
+
+	cloud.httpClient.Jar.SetCookies(domainUrlObj, cookies)
+
+	urlObj, _ := url.Parse(fmt.Sprintf("%s%s", domainUrl, "pass/serviceLogin?sid=xiaomiio&_json=true"))
+	request := http.Request{Method: http.MethodGet, URL: urlObj}
 
 	request.Header = map[string][]string{
 		"User-Agent": {"APP/com.xiaomi.mihome APPV/6.0.103 iosPassportSDK/3.9.0 iOS/14.4 miHSTS"},
 	}
-	request.AddCookie(&cookie1)
-	request.AddCookie(&cookie2)
 
 	response, err := http.DefaultClient.Do(&request)
 	if err != nil {
@@ -59,6 +87,44 @@ func (cloud *Cloud) GetLoginInfo() (LoginInfo, error) {
 	}
 
 	return result, nil
+}
+
+type LoginRequestDto struct {
+	LoginInfo
+	Username       string `json:"user"`
+	HashedPassword string `json:"hash"`
+}
+
+func (cloud *Cloud) Login(info LoginInfo) string {
+	values := make(map[string][]string, 6)
+	values["_sign"] = []string{info.SignToken}
+	values["callback"] = []string{info.CallBack}
+	values["qs"] = []string{info.QueryStr}
+	values["sid"] = []string{info.Sid}
+	values["user"] = []string{cloud.Username}
+	values["hash"] = []string{hash(cloud.Password)}
+
+	domainUrl := "https://account.xiaomi.com/"
+	response, err := cloud.httpClient.PostForm(fmt.Sprintf("%s%s", domainUrl, "pass/serviceLoginAuth2?_json=true"), values)
+	if err != nil {
+		return err.Error()
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err.Error()
+	}
+
+	bodyStr := string(body)
+	return bodyStr
+}
+
+func hash(password string) string {
+	h := md5.New()
+	io.WriteString(h, password)
+	hash := h.Sum(nil)
+
+	return hex.EncodeToString(hash)
 }
 
 func getClientId() string {
