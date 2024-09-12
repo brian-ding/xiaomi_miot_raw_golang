@@ -1,8 +1,8 @@
 package micloud
 
 import (
+	"bytes"
 	"crypto/md5"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -58,14 +59,10 @@ func (cloud *Cloud) GetLoginInfo() (LoginInfo, error) {
 
 	cloud.httpClient.Jar.SetCookies(domainUrlObj, cookies)
 
-	urlObj, _ := url.Parse(fmt.Sprintf("%s%s", domainUrl, "pass/serviceLogin?sid=xiaomiio&_json=true"))
-	request := http.Request{Method: http.MethodGet, URL: urlObj}
+	request, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s%s", domainUrl, "pass/serviceLogin?sid=xiaomiio&_json=true"), nil)
+	request.Header.Add("User-Agnet", "APP/com.xiaomi.mihome APPV/6.0.103 iosPassportSDK/3.9.0 iOS/14.4 miHSTS")
 
-	request.Header = map[string][]string{
-		"User-Agent": {"APP/com.xiaomi.mihome APPV/6.0.103 iosPassportSDK/3.9.0 iOS/14.4 miHSTS"},
-	}
-
-	response, err := http.DefaultClient.Do(&request)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return result, errors.New(err.Error())
 	}
@@ -77,7 +74,7 @@ func (cloud *Cloud) GetLoginInfo() (LoginInfo, error) {
 
 	prefix := "&&&START&&&"
 	if !strings.HasPrefix(bodyStr, prefix) {
-		return result, fmt.Errorf("response prefix does not match")
+		return result, errors.New("response prefix does not match")
 	}
 
 	bodyStr = strings.Replace(bodyStr, prefix, "", 1)
@@ -89,42 +86,61 @@ func (cloud *Cloud) GetLoginInfo() (LoginInfo, error) {
 	return result, nil
 }
 
-type LoginRequestDto struct {
-	LoginInfo
-	Username       string `json:"user"`
-	HashedPassword string `json:"hash"`
+type LoginResult struct {
+	Location string `json:"location"`
 }
 
-func (cloud *Cloud) Login(info LoginInfo) string {
-	values := make(map[string][]string, 6)
-	values["_sign"] = []string{info.SignToken}
-	values["callback"] = []string{info.CallBack}
-	values["qs"] = []string{info.QueryStr}
-	values["sid"] = []string{info.Sid}
-	values["user"] = []string{cloud.Username}
-	values["hash"] = []string{hash(cloud.Password)}
+func (cloud *Cloud) Login(info LoginInfo) (LoginResult, error) {
+	var result LoginResult
+	form := url.Values{}
+	form.Set("_json", "true")
+	form.Set("_sign", info.SignToken)
+	form.Set("callback", info.CallBack)
+	form.Set("qs", info.QueryStr)
+	form.Set("sid", info.Sid)
+	form.Set("user", cloud.Username)
+	form.Set("hash", hash(cloud.Password))
+	vEncoded := form.Encode()
+	payload := bytes.NewReader([]byte(vEncoded))
 
 	domainUrl := "https://account.xiaomi.com/"
-	response, err := cloud.httpClient.PostForm(fmt.Sprintf("%s%s", domainUrl, "pass/serviceLoginAuth2?_json=true"), values)
+	request, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s%s", domainUrl, "pass/serviceLoginAuth2"), payload)
+	request.Header.Add("Content-Length", strconv.Itoa(len(vEncoded)))
+	request.Header.Add("User-Agnet", "APP/com.xiaomi.mihome APPV/6.0.103 iosPassportSDK/3.9.0 iOS/14.4 miHSTS")
+	request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	response, err := cloud.httpClient.Do(request)
 	if err != nil {
-		return err.Error()
+		println(err.Error())
+		return result, errors.New(err.Error())
 	}
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return err.Error()
+		return result, errors.New(err.Error())
 	}
 
 	bodyStr := string(body)
-	return bodyStr
+
+	prefix := "&&&START&&&"
+	if !strings.HasPrefix(bodyStr, prefix) {
+		return result, errors.New("response prefix does not match")
+	}
+
+	bodyStr = strings.Replace(bodyStr, prefix, "", 1)
+	err = json.Unmarshal([]byte(bodyStr), &result)
+	if err != nil {
+		return result, errors.New(err.Error())
+	}
+
+	return result, nil
 }
 
 func hash(password string) string {
-	h := md5.New()
-	io.WriteString(h, password)
-	hash := h.Sum(nil)
+	hash := md5.Sum([]byte(password))
+	hashStr := fmt.Sprintf("%x", hash)
 
-	return hex.EncodeToString(hash)
+	return strings.ToUpper(hashStr)
 }
 
 func getClientId() string {
